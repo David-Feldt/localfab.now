@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { calculatePrintEstimate, type PrintEstimate } from "@/lib/3d-utils";
 import { Card, CardContent } from "@/components/ui/card";
+import { ModelViewer } from "@/components/model-viewer";
 
 const materials = [
   { value: "pla", label: "PLA" },
@@ -234,6 +235,11 @@ export function OrderForm() {
                     >
                       <X className="w-4 h-4 text-muted-foreground" />
                     </button>
+                  </div>
+                  
+                  {/* 3D Model Preview */}
+                  <div className="mt-4">
+                    <ModelViewer file={file} className="h-64 w-full" />
                   </div>
                   
                   {estimate && !calculating && (
