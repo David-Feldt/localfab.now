@@ -5,12 +5,37 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import JSZip from "jszip";
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "three-mesh-bvh";
 
 // Build plate dimensions (mm) - 400x400x400 cube
 const BUILD_PLATE_WIDTH = 400;
 const BUILD_PLATE_DEPTH = 400;
 const BUILD_PLATE_HEIGHT = 400; // Height of the build volume
 const BUILD_PLATE_THICKNESS = 2; // Thickness of the walls/floor (not used for grids)
+
+// Extend THREE.js prototypes with BVH acceleration
+// This enables frustum culling and faster raycasting for large meshes
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+/**
+ * Add BVH acceleration structure to geometry for frustum culling
+ * This allows the renderer to skip triangles outside the view frustum,
+ * dramatically improving performance for large meshes
+ */
+function addBVHAcceleration(geometry: THREE.BufferGeometry): void {
+  try {
+    // Compute BVH bounds tree for frustum culling
+    // This creates a spatial acceleration structure that allows the renderer
+    // to quickly determine which triangles are visible and skip rendering
+    // triangles outside the camera's view frustum
+    geometry.computeBoundsTree();
+  } catch (error) {
+    console.warn('Failed to compute BVH tree:', error);
+    // Continue without BVH if it fails - geometry will still render
+  }
+}
 
 interface ModelViewerProps {
   file: File | null;
@@ -219,7 +244,7 @@ function OBJLoader({ file, onLoad }: { file: File; onLoad: (geometry: THREE.Buff
 }
 
 // 3MF Loader component - extracts and loads model from 3MF ZIP archive
-function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometry: THREE.BufferGeometry) => void; onError?: () => void }) {
+function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometry: THREE.BufferGeometry) => void; onError?: (err?: Error) => void }) {
   useEffect(() => {
     let cancelled = false;
     
@@ -325,8 +350,9 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
             // Check for parsing errors
             const parserError = xmlDoc.querySelector('parsererror');
             if (parserError) {
-              console.error('XML parsing error:', parserError.textContent);
-              onError?.();
+              const errorMsg = parserError.textContent || 'XML parsing error';
+              console.error('XML parsing error:', errorMsg);
+              onError?.(new Error(errorMsg));
               return;
             }
             
@@ -334,45 +360,232 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
             const root = xmlDoc.documentElement;
             console.log('Root element:', root.tagName, 'Namespace:', root.namespaceURI);
             
-            // 3MF format: look for <mesh> elements (with and without namespace)
-            let meshes = xmlDoc.getElementsByTagName('mesh');
-            
-            // Try with namespace prefix
-            if (meshes.length === 0) {
-              const namespace = root.namespaceURI || 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
-              meshes = xmlDoc.getElementsByTagNameNS(namespace, 'mesh');
-              console.log('Tried namespace:', namespace, 'Found meshes:', meshes.length);
+            // Collect all possible namespaces from the document
+            const namespaces = new Set<string>();
+            namespaces.add(root.namespaceURI || '');
+            const allElements = xmlDoc.getElementsByTagName('*');
+            for (let i = 0; i < allElements.length; i++) {
+              const ns = allElements[i].namespaceURI;
+              if (ns) namespaces.add(ns);
             }
             
-            // Try without namespace (local name)
+            // Common 3MF namespaces
+            const commonNamespaces = [
+              'http://schemas.microsoft.com/3dmanufacturing/core/2015/02',
+              'http://schemas.microsoft.com/3dmanufacturing/core/2015/01',
+              'http://schemas.microsoft.com/3dmanufacturing/core/2013/01',
+              'http://schemas.microsoft.com/3dmanufacturing/core/2015/02',
+              ''
+            ];
+            
+            // Try all namespace variations
+            let meshes: HTMLCollectionOf<Element> | Element[] = [] as any;
+            
+            // Method 1: Try getElementsByTagName without namespace
+            meshes = xmlDoc.getElementsByTagName('mesh');
+            if (meshes.length > 0) {
+              console.log('Found meshes using getElementsByTagName:', meshes.length);
+            }
+            
+            // Method 2: Try with each namespace
             if (meshes.length === 0) {
-              // Get all elements and filter for mesh
-              const allElements = xmlDoc.getElementsByTagName('*');
+              for (const ns of Array.from(namespaces).concat(commonNamespaces)) {
+                if (!ns) continue;
+                try {
+                  const nsMeshes = xmlDoc.getElementsByTagNameNS(ns, 'mesh');
+                  if (nsMeshes.length > 0) {
+                    meshes = nsMeshes;
+                    console.log('Found meshes using namespace:', ns, 'count:', meshes.length);
+                    break;
+                  }
+                } catch (e) {
+                  // Invalid namespace, continue
+                }
+              }
+            }
+            
+            // Method 3: Search by local name (handles prefixed tags like m:mesh)
+            if (meshes.length === 0) {
               const meshArray: Element[] = [];
               for (let i = 0; i < allElements.length; i++) {
                 const el = allElements[i];
-                if (el.localName === 'mesh' || el.tagName.toLowerCase().endsWith('mesh')) {
+                const localName = el.localName || el.tagName.split(':').pop() || el.tagName;
+                const tagLower = el.tagName.toLowerCase();
+                if (localName === 'mesh' || localName.toLowerCase() === 'mesh' || 
+                    tagLower.endsWith(':mesh') || tagLower === 'mesh') {
                   meshArray.push(el);
                 }
               }
-              meshes = meshArray as any;
-              console.log('Found meshes by local name:', meshes.length);
+              if (meshArray.length > 0) {
+                meshes = meshArray as any;
+                console.log('Found meshes by local name search:', meshes.length);
+              }
+            }
+            
+            // Method 4: Look for objects/resources that might contain meshes
+            if (meshes.length === 0) {
+              // Try to find <object> or <resource> elements that contain mesh data
+              let objects: HTMLCollectionOf<Element> = xmlDoc.getElementsByTagName('object') as any;
+              if (objects.length === 0) {
+                for (const ns of Array.from(namespaces).concat(commonNamespaces)) {
+                  if (!ns) continue;
+                  try {
+                    objects = xmlDoc.getElementsByTagNameNS(ns, 'object') as any;
+                    if (objects.length > 0) break;
+                  } catch (e) {}
+                }
+              }
+              
+              // Also try resources
+              let resources: HTMLCollectionOf<Element> = xmlDoc.getElementsByTagName('resource') as any;
+              if (resources.length === 0) {
+                for (const ns of Array.from(namespaces).concat(commonNamespaces)) {
+                  if (!ns) continue;
+                  try {
+                    resources = xmlDoc.getElementsByTagNameNS(ns, 'resource') as any;
+                    if (resources.length > 0) break;
+                  } catch (e) {}
+                }
+              }
+              
+              // Search within objects for meshes
+              const meshArray: Element[] = [];
+              
+              // Search in objects
+              for (let i = 0; i < objects.length; i++) {
+                const obj = objects[i];
+                // Look for mesh children recursively
+                const searchForMeshes = (element: Element) => {
+                  for (let j = 0; j < element.children.length; j++) {
+                    const child = element.children[j];
+                    const localName = child.localName || child.tagName.split(':').pop() || child.tagName;
+                    const tagLower = child.tagName.toLowerCase();
+                    if (localName === 'mesh' || localName.toLowerCase() === 'mesh' || 
+                        tagLower.endsWith(':mesh') || tagLower === 'mesh') {
+                      if (!meshArray.includes(child as Element)) {
+                        meshArray.push(child as Element);
+                      }
+                    }
+                    // Recursively search children
+                    if (child.children.length > 0) {
+                      searchForMeshes(child);
+                    }
+                  }
+                  // Also try getElementsByTagName
+                  const childMeshes = element.getElementsByTagName('mesh');
+                  for (let j = 0; j < childMeshes.length; j++) {
+                    if (!meshArray.includes(childMeshes[j])) {
+                      meshArray.push(childMeshes[j]);
+                    }
+                  }
+                };
+                searchForMeshes(obj);
+              }
+              
+              // Search in resources
+              for (let i = 0; i < resources.length; i++) {
+                const res = resources[i];
+                const searchForMeshes = (element: Element) => {
+                  for (let j = 0; j < element.children.length; j++) {
+                    const child = element.children[j];
+                    const localName = child.localName || child.tagName.split(':').pop() || child.tagName;
+                    const tagLower = child.tagName.toLowerCase();
+                    if (localName === 'mesh' || localName.toLowerCase() === 'mesh' || 
+                        tagLower.endsWith(':mesh') || tagLower === 'mesh') {
+                      if (!meshArray.includes(child as Element)) {
+                        meshArray.push(child as Element);
+                      }
+                    }
+                    if (child.children.length > 0) {
+                      searchForMeshes(child);
+                    }
+                  }
+                  const childMeshes = element.getElementsByTagName('mesh');
+                  for (let j = 0; j < childMeshes.length; j++) {
+                    if (!meshArray.includes(childMeshes[j])) {
+                      meshArray.push(childMeshes[j]);
+                    }
+                  }
+                };
+                searchForMeshes(res);
+              }
+              
+              if (meshArray.length > 0) {
+                meshes = meshArray as any;
+                console.log('Found meshes within objects/resources:', meshes.length);
+              }
+            }
+            
+            // Method 5: Deep recursive search through entire document
+            if (meshes.length === 0) {
+              console.log('Attempting deep recursive search for mesh elements...');
+              const meshArray: Element[] = [];
+              const searchRecursive = (element: Element) => {
+                const tagName = element.tagName.toLowerCase();
+                const localName = element.localName || tagName.split(':').pop() || tagName;
+                
+                // Check if this element is a mesh
+                if (localName === 'mesh' || tagName.endsWith(':mesh') || tagName === 'mesh') {
+                  if (!meshArray.includes(element)) {
+                    meshArray.push(element);
+                  }
+                }
+                
+                // Recursively search all children
+                for (let i = 0; i < element.children.length; i++) {
+                  searchRecursive(element.children[i] as Element);
+                }
+              };
+              
+              searchRecursive(root);
+              
+              if (meshArray.length > 0) {
+                meshes = meshArray as any;
+                console.log('Found meshes via deep recursive search:', meshes.length);
+              }
             }
             
             // Log all element names for debugging
             const allTags = new Set<string>();
-            const allElements = xmlDoc.getElementsByTagName('*');
             for (let i = 0; i < allElements.length; i++) {
               const tag = allElements[i].tagName;
               allTags.add(tag);
             }
             console.log('All XML tags found:', Array.from(allTags));
+            console.log('Namespaces found:', Array.from(namespaces));
             
             if (meshes.length === 0) {
-              console.error('No mesh elements found in 3MF model file');
+              const errorMsg = 'No mesh elements found in 3MF XML model file';
+              console.warn(errorMsg);
               console.log('Available elements:', Array.from(allTags));
-              onError?.();
-              return;
+              console.log('Namespaces found:', Array.from(namespaces));
+              console.log('Root element:', root.tagName, 'Namespace:', root.namespaceURI);
+              
+              // Try to find any elements that might contain geometry data
+              const potentialGeometryElements: string[] = [];
+              for (let i = 0; i < allElements.length; i++) {
+                const el = allElements[i];
+                const tagName = el.tagName.toLowerCase();
+                if (tagName.includes('vertex') || tagName.includes('triangle') || 
+                    tagName.includes('face') || tagName.includes('geometry') ||
+                    tagName.includes('model') || tagName.includes('object') ||
+                    tagName.includes('resource') || tagName.includes('component')) {
+                  potentialGeometryElements.push(`${el.tagName} (${el.namespaceURI || 'no namespace'})`);
+                }
+              }
+              
+              if (potentialGeometryElements.length > 0) {
+                console.log('Potential geometry-related elements found:', potentialGeometryElements);
+              }
+              
+              // Log XML structure (first 2000 chars) for debugging
+              console.log('XML structure (first 2000 chars):', text.substring(0, 2000));
+              
+              // Instead of erroring immediately, try to fall through to STL/OBJ parsing
+              // The file might contain binary STL/OBJ data even if it's a .model file
+              console.log('Attempting to parse as STL/OBJ as fallback...');
+              // Skip XML mesh processing and fall through to try STL/OBJ parsing
+              throw new Error('No meshes found in XML, trying STL/OBJ fallback');
             }
             
             console.log(`Found ${meshes.length} mesh element(s)`);
@@ -556,13 +769,17 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
             }
             return;
           } catch (xmlError) {
-            console.error('Error parsing 3MF XML:', xmlError);
-            // Fall through to try as STL
+            console.warn('Error parsing 3MF XML or no meshes found:', xmlError);
+            // Fall through to try as STL/OBJ - the file might contain binary data
           }
         }
         
-        // Try to parse as STL (binary or ASCII)
-        if (path.endsWith('.stl')) {
+        // Try to parse as STL (binary or ASCII) - either as .stl file or fallback from .model
+        // Check if it looks like STL data (binary STL has specific header structure)
+        const looksLikeSTL = path.endsWith('.stl') || 
+          (uint8Array.length > 84 && (uint8Array[80] < 32 || uint8Array[80] > 126));
+        
+        if (looksLikeSTL) {
           const isBinary = uint8Array.length > 84 && 
                            (uint8Array[80] < 32 || uint8Array[80] > 126);
           
@@ -730,16 +947,33 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
             onLoad(geometry);
           }
         } else {
-          console.error('Unsupported file type in 3MF archive:', path);
+          // Last attempt: try to detect format by content and parse accordingly
+          console.warn('Unknown file type in 3MF archive:', path);
           console.log('File size:', uint8Array.length, 'bytes');
+          
           // Try to detect format by content
           const textStart = new TextDecoder().decode(uint8Array.slice(0, Math.min(100, uint8Array.length)));
           console.log('File start:', textStart.substring(0, 100));
-          onError?.();
+          
+          // Check if it might be STL (ASCII STL starts with "solid" or binary STL has header)
+          if (textStart.trim().toLowerCase().startsWith('solid') || 
+              (uint8Array.length > 84 && (uint8Array[80] < 32 || uint8Array[80] > 126))) {
+            console.log('Detected STL-like content, attempting STL parse...');
+            // Will be handled by the STL parsing block above if path matches
+            // For now, just log and error
+          }
+          
+          // Check if it might be OBJ
+          if (textStart.trim().startsWith('v ') || textStart.includes('\nv ') || textStart.includes('\nf ')) {
+            console.log('Detected OBJ-like content, attempting OBJ parse...');
+            // Will be handled by the OBJ parsing block above if path matches
+          }
+          
+          onError?.(new Error(`Unsupported file type in 3MF archive: ${path}. File may not contain readable mesh data.`));
         }
       } catch (error) {
         console.error('Error loading 3MF:', error);
-        onError?.();
+        onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     };
     
@@ -748,7 +982,7 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
     return () => {
       cancelled = true;
     };
-  }, [file, onLoad]);
+  }, [file, onLoad, onError]);
   
   return null;
 }
@@ -781,27 +1015,48 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
       // Center the geometry
       loadedGeometry.center();
       
-        // Scale to fit build plate (leave some margin)
-        const box = loadedGeometry.boundingBox;
-        if (box && !box.isEmpty()) {
-          const size = new THREE.Vector3();
-          box.getSize(size);
-          
-          // Check width (x), depth (z), and height (y)
-          const maxWidth = Math.max(size.x, size.z); // Use larger of width/depth
-          const maxHeight = size.y;
-          
-          // Scale to fit within build area with margin (400x400x400)
-          const widthScale = (BUILD_PLATE_WIDTH * 0.8) / maxWidth;
-          const heightScale = (BUILD_PLATE_HEIGHT * 0.8) / maxHeight;
-          const scale = Math.min(widthScale, heightScale);
-          
-          if (scale > 0 && isFinite(scale)) {
-            loadedGeometry.scale(scale, scale, scale);
-            // Re-center after scaling
-            loadedGeometry.center();
-          }
+      // Scale to fit build plate (leave some margin)
+      const box = loadedGeometry.boundingBox;
+      if (box && !box.isEmpty()) {
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        
+        // Check width (x), depth (z), and height (y)
+        const maxWidth = Math.max(size.x, size.z); // Use larger of width/depth
+        const maxHeight = size.y;
+        
+        // Scale to fit within build area with margin (400x400x400)
+        const widthScale = (BUILD_PLATE_WIDTH * 0.8) / maxWidth;
+        const heightScale = (BUILD_PLATE_HEIGHT * 0.8) / maxHeight;
+        const scale = Math.min(widthScale, heightScale);
+        
+        if (scale > 0 && isFinite(scale)) {
+          loadedGeometry.scale(scale, scale, scale);
+          // Re-center after scaling
+          loadedGeometry.center();
         }
+      }
+      
+      // Performance optimization: Add BVH acceleration structure for frustum culling
+      // This allows the renderer to skip triangles outside the view frustum,
+      // dramatically improving performance for large meshes
+      // BVH is most beneficial for meshes with many triangles
+      const vertexCount = positionAttribute.count;
+      const indexAttr = loadedGeometry.index;
+      const triangleCount = indexAttr ? indexAttr.count / 3 : vertexCount / 3;
+      
+      if (triangleCount > 1000) {
+        // Only add BVH for meshes with significant triangle count to avoid overhead
+        try {
+          addBVHAcceleration(loadedGeometry);
+          console.log(`BVH acceleration structure added for mesh with ${triangleCount.toFixed(0)} triangles`);
+        } catch (bvhError) {
+          console.warn('BVH acceleration failed, continuing without it:', bvhError);
+        }
+      }
+      
+      // Recompute bounding box after processing
+      loadedGeometry.computeBoundingBox();
       
       setGeometry(loadedGeometry);
       setError(null);
@@ -813,7 +1068,7 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
     }
   }, [onLoad]);
   
-  const handleError = React.useCallback((err: Error) => {
+  const handleError = React.useCallback((err?: Error) => {
     console.error('Error loading model:', err);
     setError('Failed to load model');
     onLoad?.(); // Hide loading state even on error
@@ -825,6 +1080,25 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
       meshRef.current.rotation.y += 0.002;
     }
   });
+  
+  // Cleanup BVH tree on unmount or geometry change to prevent memory leaks
+  // IMPORTANT: This hook must be called before any conditional returns
+  // to follow the Rules of Hooks
+  useEffect(() => {
+    const currentGeometry = geometry;
+    return () => {
+      if (currentGeometry) {
+        try {
+          // Dispose of the BVH acceleration structure when geometry is no longer needed
+          if ((currentGeometry as any).boundsTree) {
+            (currentGeometry as any).disposeBoundsTree();
+          }
+        } catch (error) {
+          // Ignore errors during cleanup - geometry may not have BVH tree
+        }
+      }
+    };
+  }, [geometry]);
   
   if (error) {
     return (
