@@ -1,8 +1,8 @@
 "use client";
 
 import React from "react";
-import { useState, useRef, type DragEvent, type ChangeEvent } from "react";
-import { Upload, X, CheckCircle2 } from "lucide-react";
+import { useState, useRef, useEffect, type DragEvent, type ChangeEvent } from "react";
+import { Upload, X, CheckCircle2, Loader2 } from "lucide-react";
 import { AvailabilityTracker } from "@/components/availability-tracker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { calculatePrintEstimate, type PrintEstimate } from "@/lib/3d-utils";
+import { Card, CardContent } from "@/components/ui/card";
 
 const materials = [
   { value: "pla", label: "PLA" },
@@ -53,7 +55,41 @@ export function OrderForm() {
   const [submitted, setSubmitted] = useState(false);
   const [selectedColor, setSelectedColor] = useState("black");
   const [queueCount, setQueueCount] = useState(0);
+  const [material, setMaterial] = useState("pla");
+  const [infill, setInfill] = useState("25");
+  const [layerHeight, setLayerHeight] = useState("0.2");
+  const [quantity, setQuantity] = useState("1");
+  const [estimate, setEstimate] = useState<PrintEstimate | null>(null);
+  const [calculating, setCalculating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Calculate estimates when file or settings change
+  useEffect(() => {
+    if (!file) {
+      setEstimate(null);
+      return;
+    }
+
+    const calculateEstimate = async () => {
+      setCalculating(true);
+      try {
+        const result = await calculatePrintEstimate(file, {
+          material,
+          infill: parseFloat(infill),
+          layerHeight: parseFloat(layerHeight),
+          quantity: parseInt(quantity) || 1,
+        });
+        setEstimate(result);
+      } catch (error) {
+        console.error("Error calculating estimate:", error);
+        setEstimate(null);
+      } finally {
+        setCalculating(false);
+      }
+    };
+
+    calculateEstimate();
+  }, [file, material, infill, layerHeight, quantity]);
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
@@ -171,27 +207,72 @@ export function OrderForm() {
               />
 
               {file ? (
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center">
-                    <Upload className="w-4 h-4 text-primary" />
+                <div className="w-full">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center">
+                      {calculating ? (
+                        <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4 text-primary" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{file.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Remove file"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFile(null);
+                        setEstimate(null);
+                      }}
+                      className="p-1 rounded hover:bg-secondary"
+                    >
+                      <X className="w-4 h-4 text-muted-foreground" />
+                    </button>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium">{file.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Remove file"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFile(null);
-                    }}
-                    className="ml-4 p-1 rounded hover:bg-secondary"
-                  >
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </button>
+                  
+                  {estimate && !calculating && (
+                    <Card className="bg-muted/50 border-border">
+                      <CardContent className="pt-4">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Volume</p>
+                            <p className="font-semibold">{estimate.volume} cm³</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Filament</p>
+                            <p className="font-semibold">{estimate.filamentGrams} g</p>
+                            <p className="text-xs text-muted-foreground">
+                              {estimate.filamentMeters} m
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Est. Time</p>
+                            <p className="font-semibold">
+                              {estimate.estimatedTime < 60
+                                ? `${estimate.estimatedTime} min`
+                                : `${Math.floor(estimate.estimatedTime / 60)}h ${estimate.estimatedTime % 60}m`}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Quantity</p>
+                            <p className="font-semibold">{quantity}x</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                  
+                  {calculating && (
+                    <div className="text-xs text-muted-foreground text-center py-2">
+                      Calculating estimates...
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -222,7 +303,7 @@ export function OrderForm() {
                 <Label htmlFor="material" className="text-sm">
                   Material
                 </Label>
-                <Select defaultValue="pla">
+                <Select value={material} onValueChange={setMaterial}>
                   <SelectTrigger id="material" className="bg-card border-border">
                     <SelectValue />
                   </SelectTrigger>
@@ -263,7 +344,7 @@ export function OrderForm() {
                 <Label htmlFor="infill" className="text-sm">
                   Infill
                 </Label>
-                <Select defaultValue="25">
+                <Select value={infill} onValueChange={setInfill}>
                   <SelectTrigger id="infill" className="bg-card border-border">
                     <SelectValue />
                   </SelectTrigger>
@@ -281,7 +362,7 @@ export function OrderForm() {
                 <Label htmlFor="layer" className="text-sm">
                   Layer Height
                 </Label>
-                <Select defaultValue="0.2">
+                <Select value={layerHeight} onValueChange={setLayerHeight}>
                   <SelectTrigger id="layer" className="bg-card border-border">
                     <SelectValue />
                   </SelectTrigger>
@@ -304,7 +385,8 @@ export function OrderForm() {
                   type="number"
                   min={1}
                   max={100}
-                  defaultValue={1}
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
                   className="bg-card border-border"
                 />
               </div>
