@@ -988,7 +988,7 @@ function ThreeMFLoader({ file, onLoad, onError }: { file: File; onLoad: (geometr
 }
 
 // Model component that loads and displays the 3D file
-function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
+function Model({ file, onLoad, onError }: { file: File; onLoad?: () => void; onError?: () => void }) {
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const meshRef = useRef<THREE.Mesh>(null);
@@ -999,18 +999,20 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
       // Validate geometry
       if (!loadedGeometry || !loadedGeometry.attributes.position) {
         console.error('Invalid geometry: no position attribute');
-        setError('Invalid model file');
-        onLoad?.();
-        return;
-      }
-      
-      const positionAttribute = loadedGeometry.attributes.position;
-      if (positionAttribute.count === 0) {
-        console.error('Invalid geometry: no vertices');
-        setError('Model has no vertices');
-        onLoad?.();
-        return;
-      }
+      setError('Invalid model file');
+      onError?.();
+      onLoad?.();
+      return;
+    }
+    
+    const positionAttribute = loadedGeometry.attributes.position;
+    if (positionAttribute.count === 0) {
+      console.error('Invalid geometry: no vertices');
+      setError('Model has no vertices');
+      onError?.();
+      onLoad?.();
+      return;
+    }
       
       // Center the geometry
       loadedGeometry.center();
@@ -1064,15 +1066,17 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
     } catch (err) {
       console.error('Error processing geometry:', err);
       setError('Failed to process model');
+      onError?.();
       onLoad?.(); // Still call onLoad to hide loading state
     }
-  }, [onLoad]);
+  }, [onLoad, onError]);
   
   const handleError = React.useCallback((err?: Error) => {
     console.error('Error loading model:', err);
     setError('Failed to load model');
+    onError?.(); // Notify parent of error
     onLoad?.(); // Hide loading state even on error
-  }, [onLoad]);
+  }, [onLoad, onError]);
   
   // Auto-rotate animation (optional - can be disabled)
   useFrame(() => {
@@ -1100,13 +1104,9 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
     };
   }, [geometry]);
   
+  // Error state is handled by parent component, return null here
   if (error) {
-    return (
-      <mesh position={[0, BUILD_PLATE_THICKNESS / 2 + 10, 0]}>
-        <boxGeometry args={[50, 50, 50]} />
-        <meshStandardMaterial color="#ef4444" />
-      </mesh>
-    );
+    return null;
   }
   
   if (!geometry) {
@@ -1117,10 +1117,7 @@ function Model({ file, onLoad }: { file: File; onLoad?: () => void }) {
         {extension === '3mf' && <ThreeMFLoader file={file} onLoad={handleLoad} onError={handleError} />}
         {extension !== 'stl' && extension !== 'obj' && extension !== '3mf' && (
           <>
-            <mesh position={[0, BUILD_PLATE_THICKNESS / 2 + 10, 0]}>
-              <boxGeometry args={[50, 50, 50]} />
-              <meshStandardMaterial color="#888" />
-            </mesh>
+            {onError?.()}
             {onLoad?.()}
           </>
         )}
@@ -1191,10 +1188,12 @@ function Lights() {
 
 export function ModelViewer({ file, className }: ModelViewerProps) {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   
   useEffect(() => {
     if (file) {
       setLoading(true);
+      setError(false);
     }
   }, [file]);
   
@@ -1202,6 +1201,14 @@ export function ModelViewer({ file, className }: ModelViewerProps) {
     return (
       <div className={`flex items-center justify-center bg-muted/30 rounded-lg border border-dashed ${className || 'h-64'}`}>
         <p className="text-sm text-muted-foreground">Upload a file to preview</p>
+      </div>
+    );
+  }
+  
+  if (error) {
+    return (
+      <div className={`flex items-center justify-center bg-muted/30 rounded-lg border border-dashed ${className || 'h-64'}`}>
+        <p className="text-sm text-muted-foreground">PREVIEW not available</p>
       </div>
     );
   }
@@ -1218,7 +1225,7 @@ export function ModelViewer({ file, className }: ModelViewerProps) {
           <PerspectiveCamera makeDefault position={[400, 300, 400]} fov={50} />
           <Lights />
           <BuildPlate />
-          <Model file={file} onLoad={() => setLoading(false)} />
+          <Model file={file} onLoad={() => setLoading(false)} onError={() => setError(true)} />
           <OrbitControls
             enablePan={false}
             minDistance={200}
