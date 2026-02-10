@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
         from: '3D Print Service <onboarding@resend.dev>', // Update this to your verified domain in Resend
         to: ['dsfeldt@gmail.com'], // Always send orders to you
         reply_to: orderData.email, // Reply to customer's email
-        subject: `New 3D Print Order from ${orderData.name}`,
+        subject: `Print Request - $${orderData.totalPrice} CAD`,
         html: emailHtml,
         attachments: modelFile ? [{
           filename: orderData.fileName,

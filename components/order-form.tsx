@@ -52,8 +52,8 @@ const speedOptions = [
 ];
 
 const deliveryOptions = [
-  { value: "pickup", label: "Pickup", description: "Pick up in Toronto" },
-  { value: "delivery", label: "Local Delivery", description: "Toronto area delivery" },
+  { value: "pickup", label: "Pickup", description: "Pick up in North York" },
+  { value: "delivery", label: "Local Delivery", description: "North York area delivery" },
 ];
 
 // Neighborhoods organized by travel time (approximate distances)
@@ -330,7 +330,7 @@ export function OrderForm() {
               Order received
             </h2>
             <p className="text-muted-foreground leading-relaxed">
-              {"We'll review your file and send you a quote via email. Typical turnaround is 2 — 5 business days depending on size and complexity."}
+              {"We'll review your file and send you a approved quote and payment link via email."}
             </p>
             <Button
               className="mt-8 bg-primary text-primary-foreground hover:bg-primary/90"
@@ -358,8 +358,11 @@ export function OrderForm() {
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2 text-balance">
               Submit a print
             </h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              Upload your model, pick your options, and we handle the rest.
+            <p className="text-muted-foreground text-sm leading-relaxed mb-2">
+              Upload your model, pick your options, get a quote and request a payment link.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Build plate: 400×400×400 mm
             </p>
           </div>
         </div>
