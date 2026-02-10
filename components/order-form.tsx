@@ -3,7 +3,6 @@
 import React from "react";
 import { useState, useRef, useEffect, type DragEvent, type ChangeEvent } from "react";
 import { Upload, X, CheckCircle2, Loader2 } from "lucide-react";
-import { AvailabilityTracker } from "@/components/availability-tracker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -99,7 +98,6 @@ export function OrderForm() {
   const [dragOver, setDragOver] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [selectedColor, setSelectedColor] = useState("black");
-  const [queueCount, setQueueCount] = useState(0);
   const [material, setMaterial] = useState("pla");
   const [infill, setInfill] = useState("25");
   const [layerHeight, setLayerHeight] = useState("0.2");
@@ -111,7 +109,15 @@ export function OrderForm() {
   const [deliveryDistance, setDeliveryDistance] = useState<number | null>(null);
   const [estimate, setEstimate] = useState<PrintEstimate | null>(null);
   const [calculating, setCalculating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [notes, setNotes] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const notesInputRef = useRef<HTMLTextAreaElement>(null);
+  const captureScreenshotRef = useRef<(() => Promise<string | null>) | null>(null);
   
   // Business location in Toronto (example coordinates - replace with actual location)
   const BUSINESS_LOCATION = {
@@ -239,18 +245,82 @@ export function OrderForm() {
     if (selected) setFile(selected);
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setQueueCount((prev) => prev + 1);
-    setSubmitted(true);
+    
+    if (!file || !estimate || !name || !email) {
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      // Capture screenshot
+      let screenshotDataUrl: string | null = null;
+      if (captureScreenshotRef.current) {
+        screenshotDataUrl = await captureScreenshotRef.current();
+      }
+
+      // Prepare form data
+      const formData = new FormData();
+      formData.append('name', name);
+      formData.append('email', email);
+      formData.append('notes', notes);
+      formData.append('fileName', file.name);
+      formData.append('fileSize', `${(file.size / 1024 / 1024).toFixed(2)} MB`);
+      formData.append('material', material);
+      formData.append('color', selectedColor);
+      formData.append('infill', infill);
+      formData.append('layerHeight', layerHeight);
+      formData.append('quantity', quantity);
+      formData.append('speed', speed);
+      formData.append('delivery', delivery);
+      if (delivery === 'delivery') {
+        formData.append('deliveryAddress', selectedNeighborhood === 'other' ? deliveryAddress : selectedNeighborhood);
+        if (deliveryDistance !== null) {
+          formData.append('deliveryDistance', deliveryDistance.toFixed(1));
+        }
+      }
+      formData.append('volume', estimate.volume.toString());
+      formData.append('filamentGrams', estimate.filamentGrams.toString());
+      formData.append('estimatedTime', estimate.estimatedTime.toString());
+      formData.append('manufacturingPrice', estimate.manufacturingPrice.toFixed(2));
+      formData.append('deliveryPrice', estimate.deliveryPrice.toFixed(2));
+      formData.append('totalPrice', estimate.price.toFixed(2));
+
+      // Convert screenshot to File if available
+      if (screenshotDataUrl) {
+        const response = await fetch(screenshotDataUrl);
+        const blob = await response.blob();
+        const screenshotFile = new File([blob], 'model-preview.png', { type: 'image/png' });
+        formData.append('modelImage', screenshotFile);
+      }
+
+      // Add the original file
+      formData.append('modelFile', file);
+
+      // Send to API
+      const response = await fetch('/api/send-order', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send order');
+      }
+
+      setSubmitted(true);
+    } catch (error) {
+      console.error('Error submitting order:', error);
+      alert('Failed to submit order. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
     return (
       <div className="flex-1 flex flex-col px-6 py-12 md:py-20">
-        <div className="flex justify-end mb-10">
-          <AvailabilityTracker queueCount={queueCount} />
-        </div>
         <div className="flex-1 flex items-center justify-center">
           <div className="max-w-md text-center">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-6">
@@ -280,7 +350,7 @@ export function OrderForm() {
   return (
     <div className="flex-1 flex flex-col items-center px-6 py-12 md:py-20">
       <div className="w-full max-w-2xl">
-        <div className="flex items-start justify-between gap-6 mb-10">
+        <div className="mb-10">
           <div>
             <p className="font-mono text-xs tracking-[0.3em] uppercase text-primary mb-2">
               Local Toronto 3D print
@@ -292,12 +362,6 @@ export function OrderForm() {
               Upload your model, pick your options, and we handle the rest.
             </p>
           </div>
-          <div className="hidden sm:block shrink-0 pt-1">
-            <AvailabilityTracker queueCount={queueCount} />
-          </div>
-        </div>
-        <div className="sm:hidden mb-6">
-          <AvailabilityTracker queueCount={queueCount} />
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-10">
@@ -374,7 +438,13 @@ export function OrderForm() {
                   
                   {/* 3D Model Preview */}
                   <div className="mt-4">
-                    <ModelViewer file={file} className="h-64 w-full" />
+                    <ModelViewer 
+                      file={file} 
+                      className="h-64 w-full"
+                      onScreenshotReady={(capture) => {
+                        captureScreenshotRef.current = capture;
+                      }}
+                    />
                   </div>
                   
                   {estimate && !calculating && (
@@ -672,8 +742,11 @@ export function OrderForm() {
                 </Label>
                 <Input
                   id="name"
+                  ref={nameInputRef}
                   required
                   placeholder="Your name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   className="bg-card border-border"
                 />
               </div>
@@ -683,9 +756,12 @@ export function OrderForm() {
                 </Label>
                 <Input
                   id="email"
+                  ref={emailInputRef}
                   type="email"
                   required
                   placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="bg-card border-border"
                 />
               </div>
@@ -696,8 +772,11 @@ export function OrderForm() {
                 </Label>
                 <Textarea
                   id="notes"
+                  ref={notesInputRef}
                   placeholder="Special requirements, finish preferences, orientation notes..."
                   rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
                   className="bg-card border-border resize-none"
                 />
               </div>
@@ -710,17 +789,17 @@ export function OrderForm() {
               <div className="flex flex-col gap-3">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Manufacturing Price</span>
-                  <span className="text-sm font-semibold">${estimate.manufacturingPrice.toFixed(2)} CAD</span>
+                  <span className="text-sm font-semibold">~${estimate.manufacturingPrice.toFixed(2)} CAD</span>
                 </div>
                 {estimate.deliveryPrice > 0 && (
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Delivery Price</span>
-                    <span className="text-sm font-semibold">${estimate.deliveryPrice.toFixed(2)} CAD</span>
+                    <span className="text-sm font-semibold">~${estimate.deliveryPrice.toFixed(2)} CAD</span>
                   </div>
                 )}
                 <div className="flex justify-between items-center pt-3 border-t border-border">
                   <span className="text-base font-semibold">Total Price</span>
-                  <span className="text-lg font-bold">${estimate.price.toFixed(2)} CAD</span>
+                  <span className="text-lg font-bold">~${estimate.price.toFixed(2)} CAD</span>
                 </div>
               </div>
             </div>
@@ -729,9 +808,10 @@ export function OrderForm() {
           <Button
             type="submit"
             size="lg"
-            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold tracking-wide"
+            disabled={submitting || !file || !estimate || !name || !email}
+            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold tracking-wide disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Submit Print Order
+            {submitting ? 'Submitting...' : 'Submit Print Order'}
           </Button>
         </form>
       </div>

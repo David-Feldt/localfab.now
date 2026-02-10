@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useRef, useEffect, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import JSZip from "jszip";
@@ -40,6 +40,7 @@ function addBVHAcceleration(geometry: THREE.BufferGeometry): void {
 interface ModelViewerProps {
   file: File | null;
   className?: string;
+  onScreenshotReady?: (captureScreenshot: () => Promise<string | null>) => void;
 }
 
 // STL Loader component - reads file directly
@@ -1186,7 +1187,37 @@ function Lights() {
   );
 }
 
-export function ModelViewer({ file, className }: ModelViewerProps) {
+// Component to capture gl renderer
+function CanvasCapture({ onReady }: { onReady: (capture: () => Promise<string | null>) => void }) {
+  const { gl } = useThree();
+  
+  useEffect(() => {
+    const captureScreenshot = async (): Promise<string | null> => {
+      try {
+        const canvas = gl.domElement;
+        if (!canvas) {
+          return null;
+        }
+        // Convert canvas to data URL
+        return canvas.toDataURL('image/png');
+      } catch (error) {
+        console.error('Error capturing screenshot:', error);
+        return null;
+      }
+    };
+    
+    // Wait a bit for scene to render before exposing capture function
+    const timer = setTimeout(() => {
+      onReady(captureScreenshot);
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, [gl, onReady]);
+  
+  return null;
+}
+
+export function ModelViewer({ file, className, onScreenshotReady }: ModelViewerProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   
@@ -1233,6 +1264,7 @@ export function ModelViewer({ file, className }: ModelViewerProps) {
             minPolarAngle={Math.PI / 6}
             maxPolarAngle={Math.PI / 2.2}
           />
+          {onScreenshotReady && <CanvasCapture onReady={onScreenshotReady} />}
         </Suspense>
       </Canvas>
       <div className="absolute bottom-2 left-2 text-xs text-muted-foreground bg-black/50 px-2 py-1 rounded">
