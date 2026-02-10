@@ -1128,7 +1128,7 @@ function Model({ file, onLoad, onError }: { file: File; onLoad?: () => void; onE
   return (
     <mesh ref={meshRef} geometry={geometry} position={[0, 0, 0]}>
       <meshStandardMaterial 
-        color="#22c55e" 
+        color="#ffffff" 
         metalness={0.3}
         roughness={0.4}
       />

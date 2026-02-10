@@ -14,6 +14,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SelectGroup,
+  SelectLabel,
+  SelectSeparator,
 } from "@/components/ui/select";
 import { calculatePrintEstimate, type PrintEstimate } from "@/lib/3d-utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,19 +24,13 @@ import { ModelViewer } from "@/components/model-viewer";
 
 const materials = [
   { value: "pla", label: "PLA" },
-  { value: "petg", label: "PETG" },
-  { value: "abs", label: "ABS" },
-  { value: "tpu", label: "TPU" },
+  { value: "petg", label: "PETG", italic: true, note: "upon request" },
+  { value: "tpu", label: "TPU", italic: true, note: "upon request" },
 ];
 
 const colors = [
   { value: "black", label: "Black", swatch: "#1a1a1a" },
   { value: "white", label: "White", swatch: "#e8e8e8" },
-  { value: "orange", label: "Orange", swatch: "#f97316" },
-  { value: "red", label: "Red", swatch: "#dc2626" },
-  { value: "blue", label: "Blue", swatch: "#2563eb" },
-  { value: "green", label: "Green", swatch: "#16a34a" },
-  { value: "gray", label: "Gray", swatch: "#6b7280" },
 ];
 
 const infillOptions = [
@@ -49,6 +46,53 @@ const layerOptions = [
   { value: "0.12", label: "0.12 mm — Fine" },
 ];
 
+const speedOptions = [
+  { value: "instant", label: "Instant", description: "Same day" },
+  { value: "fast", label: "Fast", description: "1-2 days" },
+  { value: "regular", label: "Regular", description: "1-5 days" },
+];
+
+const deliveryOptions = [
+  { value: "pickup", label: "Pickup", description: "Pick up in Toronto" },
+  { value: "delivery", label: "Local Delivery", description: "Toronto area delivery" },
+];
+
+// Neighborhoods organized by travel time (approximate distances)
+const neighborhoodsByTime = {
+  "5min": [
+    { name: "Newtonbrook West", coords: { lat: 43.7700, lng: -79.4200 } },
+    { name: "Thornhill", coords: { lat: 43.8100, lng: -79.4200 } },
+  ],
+  "10min": [
+    { name: "Bathurst Manor", coords: { lat: 43.7500, lng: -79.4500 } },
+    { name: "Willowdale", coords: { lat: 43.7600, lng: -79.4000 } },
+    { name: "Langstaff / South Richmond Hill", coords: { lat: 43.8500, lng: -79.4300 } },
+  ],
+  "15min": [
+    { name: "Bayview Village", coords: { lat: 43.7800, lng: -79.3800 } },
+    { name: "Armour Heights", coords: { lat: 43.7400, lng: -79.4300 } },
+    { name: "Clanton Park", coords: { lat: 43.7300, lng: -79.4500 } },
+    { name: "Downsview", coords: { lat: 43.7500, lng: -79.4800 } },
+    { name: "York Mills", coords: { lat: 43.7500, lng: -79.3800 } },
+    { name: "Don Mills", coords: { lat: 43.7600, lng: -79.3500 } },
+    { name: "Concord", coords: { lat: 43.8000, lng: -79.5000 } },
+    { name: "Thornhill Woods", coords: { lat: 43.8300, lng: -79.4500 } },
+  ],
+  "20min": [
+    { name: "Lawrence Park", coords: { lat: 43.7200, lng: -79.4000 } },
+    { name: "Maple", coords: { lat: 43.8600, lng: -79.5000 } },
+    { name: "Woodbridge (southern portions)", coords: { lat: 43.7800, lng: -79.6000 } },
+  ],
+};
+
+// Flatten neighborhoods for dropdown
+const allNeighborhoods = [
+  ...neighborhoodsByTime["5min"].map(n => ({ ...n, time: "5min" })),
+  ...neighborhoodsByTime["10min"].map(n => ({ ...n, time: "10min" })),
+  ...neighborhoodsByTime["15min"].map(n => ({ ...n, time: "15min" })),
+  ...neighborhoodsByTime["20min"].map(n => ({ ...n, time: "20min" })),
+];
+
 
 export function OrderForm() {
   const [file, setFile] = useState<File | null>(null);
@@ -60,9 +104,97 @@ export function OrderForm() {
   const [infill, setInfill] = useState("25");
   const [layerHeight, setLayerHeight] = useState("0.2");
   const [quantity, setQuantity] = useState("1");
+  const [speed, setSpeed] = useState("regular");
+  const [delivery, setDelivery] = useState("pickup");
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState<string>("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryDistance, setDeliveryDistance] = useState<number | null>(null);
   const [estimate, setEstimate] = useState<PrintEstimate | null>(null);
   const [calculating, setCalculating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  
+  // Business location in Toronto (example coordinates - replace with actual location)
+  const BUSINESS_LOCATION = {
+    lat: 43.7907, // Toronto coordinates (replace with actual business location)
+    lng: -79.4558,
+  };
+
+  // Calculate distance using Haversine formula
+  const calculateDistanceKm = React.useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }, []);
+
+  // Calculate distance when neighborhood or custom address changes
+  useEffect(() => {
+    if (delivery === 'delivery') {
+      if (selectedNeighborhood && selectedNeighborhood !== 'other') {
+        // Use predefined neighborhood coordinates
+        const neighborhood = allNeighborhoods.find(n => n.name === selectedNeighborhood);
+        if (neighborhood && neighborhood.coords) {
+          const distance = calculateDistanceKm(
+            BUSINESS_LOCATION.lat,
+            BUSINESS_LOCATION.lng,
+            neighborhood.coords.lat,
+            neighborhood.coords.lng
+          );
+          setDeliveryDistance(distance);
+        }
+      } else if (selectedNeighborhood === 'other' && deliveryAddress.trim()) {
+        // Geocode custom address
+        const calculateDistance = async () => {
+          try {
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(deliveryAddress + ', Toronto, ON, Canada')}&limit=1`,
+              {
+                headers: {
+                  'User-Agent': '3DPrintService'
+                }
+              }
+            );
+            const data = await response.json();
+            if (data && data.length > 0) {
+              const coords = {
+                lat: parseFloat(data[0].lat),
+                lng: parseFloat(data[0].lon),
+              };
+              const distance = calculateDistanceKm(
+                BUSINESS_LOCATION.lat,
+                BUSINESS_LOCATION.lng,
+                coords.lat,
+                coords.lng
+              );
+              setDeliveryDistance(distance);
+            } else {
+              setDeliveryDistance(null);
+            }
+          } catch (error) {
+            console.error('Error calculating distance:', error);
+            setDeliveryDistance(null);
+          }
+        };
+        
+        const timeoutId = setTimeout(() => {
+          calculateDistance();
+        }, 500);
+        
+        return () => clearTimeout(timeoutId);
+      } else {
+        setDeliveryDistance(null);
+      }
+    } else {
+      setDeliveryDistance(null);
+      setSelectedNeighborhood("");
+      setDeliveryAddress("");
+    }
+  }, [delivery, selectedNeighborhood, deliveryAddress, calculateDistanceKm]);
 
   // Calculate estimates when file or settings change
   useEffect(() => {
@@ -79,6 +211,9 @@ export function OrderForm() {
           infill: parseFloat(infill),
           layerHeight: parseFloat(layerHeight),
           quantity: parseInt(quantity) || 1,
+          speed,
+          delivery,
+          deliveryDistance,
         });
         setEstimate(result);
       } catch (error) {
@@ -90,7 +225,7 @@ export function OrderForm() {
     };
 
     calculateEstimate();
-  }, [file, material, infill, layerHeight, quantity]);
+  }, [file, material, infill, layerHeight, quantity, speed, delivery, deliveryDistance]);
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
@@ -148,7 +283,7 @@ export function OrderForm() {
         <div className="flex items-start justify-between gap-6 mb-10">
           <div>
             <p className="font-mono text-xs tracking-[0.3em] uppercase text-primary mb-2">
-              Ender 5 Max
+              Local Toronto 3D print
             </p>
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2 text-balance">
               Submit a print
@@ -245,7 +380,7 @@ export function OrderForm() {
                   {estimate && !calculating && (
                     <Card className="bg-muted/50 border-border">
                       <CardContent className="pt-4">
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
                           <div>
                             <p className="text-xs text-muted-foreground mb-1">Volume</p>
                             <p className="font-semibold">{estimate.volume} cm³</p>
@@ -316,7 +451,10 @@ export function OrderForm() {
                   <SelectContent>
                     {materials.map((m) => (
                       <SelectItem key={m.value} value={m.value}>
-                        {m.label}
+                        <span className={m.italic ? "italic" : ""}>
+                          {m.label}
+                          {m.note && <span className="text-muted-foreground ml-1">({m.note})</span>}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -396,6 +534,128 @@ export function OrderForm() {
                   className="bg-card border-border"
                 />
               </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="speed" className="text-sm">
+                  Speed
+                </Label>
+                <Select value={speed} onValueChange={setSpeed}>
+                  <SelectTrigger id="speed" className="bg-card border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {speedOptions.map((s) => (
+                      <SelectItem key={s.value} value={s.value}>
+                        <div className="flex flex-col">
+                          <span>{s.label}</span>
+                          <span className="text-xs text-muted-foreground">{s.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="delivery" className="text-sm">
+                  Delivery
+                </Label>
+                <Select value={delivery} onValueChange={setDelivery}>
+                  <SelectTrigger id="delivery" className="bg-card border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {deliveryOptions.map((d) => (
+                      <SelectItem key={d.value} value={d.value}>
+                        <div className="flex flex-col">
+                          <span>{d.label}</span>
+                          <span className="text-xs text-muted-foreground">{d.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {delivery === 'delivery' && (
+                <>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="neighborhood" className="text-sm">
+                      Neighborhood
+                    </Label>
+                    <Select value={selectedNeighborhood} onValueChange={setSelectedNeighborhood}>
+                      <SelectTrigger id="neighborhood" className="bg-card border-border">
+                        <SelectValue placeholder="Select neighborhood" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>5 minutes</SelectLabel>
+                          {neighborhoodsByTime["5min"].map((n) => (
+                            <SelectItem key={n.name} value={n.name}>
+                              {n.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                        <SelectGroup>
+                          <SelectLabel>10 minutes</SelectLabel>
+                          {neighborhoodsByTime["10min"].map((n) => (
+                            <SelectItem key={n.name} value={n.name}>
+                              {n.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                        <SelectGroup>
+                          <SelectLabel>15 minutes</SelectLabel>
+                          {neighborhoodsByTime["15min"].map((n) => (
+                            <SelectItem key={n.name} value={n.name}>
+                              {n.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                        <SelectGroup>
+                          <SelectLabel>20 minutes</SelectLabel>
+                          {neighborhoodsByTime["20min"].map((n) => (
+                            <SelectItem key={n.name} value={n.name}>
+                              {n.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                        <SelectSeparator />
+                        <SelectItem value="other">
+                          Other (custom address)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {selectedNeighborhood === 'other' && (
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="deliveryAddress" className="text-sm">
+                        Custom Address
+                      </Label>
+                      <Input
+                        id="deliveryAddress"
+                        type="text"
+                        placeholder="Enter your Toronto address"
+                        value={deliveryAddress}
+                        onChange={(e) => setDeliveryAddress(e.target.value)}
+                        className="bg-card border-border"
+                      />
+                      {deliveryAddress && deliveryDistance === null && (
+                        <p className="text-xs text-muted-foreground">
+                          Calculating distance...
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {deliveryDistance !== null && (
+                    <div className="text-xs text-muted-foreground">
+                      Distance: {deliveryDistance.toFixed(1)} km from pickup location
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
@@ -443,6 +703,28 @@ export function OrderForm() {
               </div>
             </div>
           </div>
+
+          {/* Price Breakdown */}
+          {estimate && !calculating && (
+            <div className="border-t border-border pt-6">
+              <div className="flex flex-col gap-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Manufacturing Price</span>
+                  <span className="text-sm font-semibold">${estimate.manufacturingPrice.toFixed(2)} CAD</span>
+                </div>
+                {estimate.deliveryPrice > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Delivery Price</span>
+                    <span className="text-sm font-semibold">${estimate.deliveryPrice.toFixed(2)} CAD</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-3 border-t border-border">
+                  <span className="text-base font-semibold">Total Price</span>
+                  <span className="text-lg font-bold">${estimate.price.toFixed(2)} CAD</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <Button
             type="submit"

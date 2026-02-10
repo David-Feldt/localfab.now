@@ -7,6 +7,9 @@ interface PrintSettings {
   infill: number; // percentage (0-100)
   layerHeight: number; // mm
   quantity: number;
+  speed?: string; // 'instant', 'fast', 'regular'
+  delivery?: string; // 'pickup', 'delivery'
+  deliveryDistance?: number | null; // distance in km
 }
 
 export interface PrintEstimate {
@@ -14,6 +17,9 @@ export interface PrintEstimate {
   filamentGrams: number; // grams
   filamentMeters: number; // meters
   estimatedTime: number; // minutes
+  price: number; // CAD (total)
+  manufacturingPrice: number; // CAD
+  deliveryPrice: number; // CAD
 }
 
 // Material densities in g/cm³
@@ -780,6 +786,91 @@ function estimatePrintTime(
 }
 
 /**
+ * Calculate price estimate based on print time and speed
+ */
+function calculatePrice(
+  estimatedTime: number,
+  settings: PrintSettings
+): { totalPrice: number; manufacturingPrice: number; deliveryPrice: number } {
+  // Base machine time cost per hour (CAD)
+  const baseRatePerHour = 15.0; // $15/hour base rate
+  
+  // Speed multipliers (rush orders cost more)
+  const speedMultipliers: Record<string, number> = {
+    instant: 5.0,  // 400% premium for same day
+    fast: 2.5,     // 150% premium for 1-2 days
+    regular: 1.0,  // Base rate for 1-5 days
+  };
+  
+  // Calculate base time cost
+  const timeHours = estimatedTime / 60;
+  const baseTimeCost = timeHours * baseRatePerHour;
+  
+  // Apply speed multiplier
+  const speed = settings.speed || 'regular';
+  const speedMultiplier = speedMultipliers[speed] || 1.0;
+  
+  // Calculate price per unit based on time and speed
+  const pricePerUnit = baseTimeCost * speedMultiplier;
+  
+  // Minimum charge (setup fee)
+  const minimumCharge = 10.0; // $10 minimum order
+  
+  // Apply minimum charge
+  const priceWithMinimum = Math.max(minimumCharge, pricePerUnit);
+  
+  // Quantity discount (bulk orders get discount)
+  const getQuantityDiscount = (qty: number): number => {
+    if (qty >= 10) return 0.15; // 15% off for 10+
+    if (qty >= 5) return 0.10;  // 10% off for 5+
+    if (qty >= 3) return 0.05;  // 5% off for 3+
+    return 0; // No discount for 1-2
+  };
+  
+  // Apply quantity discount
+  const quantityDiscount = getQuantityDiscount(settings.quantity);
+  const discountedPricePerUnit = priceWithMinimum * (1 - quantityDiscount);
+  
+  // Total manufacturing price for quantity
+  const manufacturingPrice = discountedPricePerUnit * settings.quantity;
+  
+  // Calculate delivery fee if local delivery is selected
+  let deliveryPrice = 0;
+  if (settings.delivery === 'delivery' && settings.deliveryDistance !== null && settings.deliveryDistance !== undefined) {
+    const distanceKm = settings.deliveryDistance;
+    
+    // Average driving speed in Toronto (km/h) - accounting for traffic
+    const averageSpeedKmh = 40; // Conservative estimate for city driving
+    
+    // Calculate travel time one way (hours)
+    const travelTimeOneWay = distanceKm / averageSpeedKmh;
+    
+    // Charge for round trip (back and forth)
+    const totalTravelTime = travelTimeOneWay * 2;
+    
+    // Delivery rate per hour
+    const deliveryRatePerHour = 25.0; // $25/hour
+    
+    // Calculate delivery fee based on travel time
+    const deliveryFee = totalTravelTime * deliveryRatePerHour;
+    
+    // Minimum delivery fee
+    const minimumDeliveryFee = 10.0; // $10 minimum
+    
+    deliveryPrice = Math.max(minimumDeliveryFee, deliveryFee);
+  }
+  
+  // Total price is manufacturing + delivery
+  const totalPrice = manufacturingPrice + deliveryPrice;
+  
+  return {
+    totalPrice,
+    manufacturingPrice,
+    deliveryPrice,
+  };
+}
+
+/**
  * Calculate complete print estimate
  */
 export async function calculatePrintEstimate(
@@ -797,10 +888,12 @@ export async function calculatePrintEstimate(
   const filamentGrams = estimateFilamentGrams(volume, settings);
   const filamentMeters = estimateFilamentMeters(filamentGrams, settings.material);
   const estimatedTime = estimatePrintTime(volume, settings);
+  const priceBreakdown = calculatePrice(estimatedTime, settings);
   
   // Validate all results
-  if (!isFinite(filamentGrams) || !isFinite(filamentMeters) || !isFinite(estimatedTime)) {
-    console.error('Invalid calculation results:', { volume, filamentGrams, filamentMeters, estimatedTime });
+  if (!isFinite(filamentGrams) || !isFinite(filamentMeters) || !isFinite(estimatedTime) || 
+      !isFinite(priceBreakdown.totalPrice) || !isFinite(priceBreakdown.manufacturingPrice) || !isFinite(priceBreakdown.deliveryPrice)) {
+    console.error('Invalid calculation results:', { volume, filamentGrams, filamentMeters, estimatedTime, priceBreakdown });
     throw new Error('Failed to calculate print estimate. Please check the file format.');
   }
   
@@ -809,5 +902,8 @@ export async function calculatePrintEstimate(
     filamentGrams: Math.round(filamentGrams * 10) / 10,
     filamentMeters: Math.round(filamentMeters * 10) / 10,
     estimatedTime: Math.round(estimatedTime),
+    price: Math.round(priceBreakdown.totalPrice * 100) / 100, // Round to 2 decimals
+    manufacturingPrice: Math.round(priceBreakdown.manufacturingPrice * 100) / 100,
+    deliveryPrice: Math.round(priceBreakdown.deliveryPrice * 100) / 100,
   };
 }
