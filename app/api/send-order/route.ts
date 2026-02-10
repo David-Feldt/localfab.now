@@ -164,6 +164,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get recipient email from form data, default to dsfeldt@gmail.com
+    const recipientEmail = (formData.get('recipientEmail') as string) || 'dsfeldt@gmail.com';
+
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -172,7 +175,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         from: '3D Print Service <onboarding@resend.dev>', // Update this to your verified domain in Resend
-        to: ['dsfeldt@gmail.com'], // Always send orders to you
+        to: [recipientEmail], // Use recipient email from form
         reply_to: orderData.email, // Reply to customer's email
         subject: `Print Request - $${orderData.totalPrice} CAD`,
         html: emailHtml,

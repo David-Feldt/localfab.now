@@ -93,7 +93,17 @@ const allNeighborhoods = [
 ];
 
 
-export function OrderForm() {
+interface OrderFormProps {
+  enableDelivery?: boolean;
+  recipientEmail?: string;
+  locationName?: string;
+}
+
+export function OrderForm({ 
+  enableDelivery = true, 
+  recipientEmail = 'dsfeldt@gmail.com',
+  locationName = 'Local Toronto 3D print'
+}: OrderFormProps = {}) {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -140,6 +150,14 @@ export function OrderForm() {
 
   // Calculate distance when neighborhood or custom address changes
   useEffect(() => {
+    if (!enableDelivery) {
+      setDelivery('pickup');
+      setDeliveryDistance(null);
+      setSelectedNeighborhood("");
+      setDeliveryAddress("");
+      return;
+    }
+    
     if (delivery === 'delivery') {
       if (selectedNeighborhood && selectedNeighborhood !== 'other') {
         // Use predefined neighborhood coordinates
@@ -200,7 +218,7 @@ export function OrderForm() {
       setSelectedNeighborhood("");
       setDeliveryAddress("");
     }
-  }, [delivery, selectedNeighborhood, deliveryAddress, calculateDistanceKm]);
+  }, [enableDelivery, delivery, selectedNeighborhood, deliveryAddress, calculateDistanceKm]);
 
   // Calculate estimates when file or settings change
   useEffect(() => {
@@ -218,8 +236,8 @@ export function OrderForm() {
           layerHeight: parseFloat(layerHeight),
           quantity: parseInt(quantity) || 1,
           speed,
-          delivery,
-          deliveryDistance,
+          delivery: enableDelivery ? delivery : 'pickup',
+          deliveryDistance: enableDelivery ? deliveryDistance : null,
         });
         setEstimate(result);
       } catch (error) {
@@ -231,7 +249,7 @@ export function OrderForm() {
     };
 
     calculateEstimate();
-  }, [file, material, infill, layerHeight, quantity, speed, delivery, deliveryDistance]);
+  }, [file, material, infill, layerHeight, quantity, speed, delivery, deliveryDistance, enableDelivery]);
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
@@ -287,6 +305,7 @@ export function OrderForm() {
       formData.append('manufacturingPrice', estimate.manufacturingPrice.toFixed(2));
       formData.append('deliveryPrice', estimate.deliveryPrice.toFixed(2));
       formData.append('totalPrice', estimate.price.toFixed(2));
+      formData.append('recipientEmail', recipientEmail);
 
       // Convert screenshot to File if available
       if (screenshotDataUrl) {
@@ -353,7 +372,7 @@ export function OrderForm() {
         <div className="mb-10">
           <div>
             <p className="font-mono text-xs tracking-[0.3em] uppercase text-primary mb-2">
-              Local Toronto 3D print
+              {locationName}
             </p>
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2 text-balance">
               Submit a print
@@ -629,28 +648,30 @@ export function OrderForm() {
                 </Select>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="delivery" className="text-sm">
-                  Delivery
-                </Label>
-                <Select value={delivery} onValueChange={setDelivery}>
-                  <SelectTrigger id="delivery" className="bg-card border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {deliveryOptions.map((d) => (
-                      <SelectItem key={d.value} value={d.value}>
-                        <div className="flex flex-col">
-                          <span>{d.label}</span>
-                          <span className="text-xs text-muted-foreground">{d.description}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {enableDelivery && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="delivery" className="text-sm">
+                    Delivery
+                  </Label>
+                  <Select value={delivery} onValueChange={setDelivery}>
+                    <SelectTrigger id="delivery" className="bg-card border-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {deliveryOptions.map((d) => (
+                        <SelectItem key={d.value} value={d.value}>
+                          <div className="flex flex-col">
+                            <span>{d.label}</span>
+                            <span className="text-xs text-muted-foreground">{d.description}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
-              {delivery === 'delivery' && (
+              {enableDelivery && delivery === 'delivery' && (
                 <>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="neighborhood" className="text-sm">
