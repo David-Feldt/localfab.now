@@ -164,8 +164,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get recipient email from form data, default to dsfeldt@gmail.com
-    const recipientEmail = (formData.get('recipientEmail') as string) || 'dsfeldt@gmail.com';
+    // Get recipient email from form data, default to david@3e8robotics.com
+    const recipientEmail = (formData.get('recipientEmail') as string) || 'david@3e8robotics.com';
 
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',

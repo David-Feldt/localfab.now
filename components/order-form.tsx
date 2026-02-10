@@ -101,7 +101,7 @@ interface OrderFormProps {
 
 export function OrderForm({ 
   enableDelivery = true, 
-  recipientEmail = 'dsfeldt@gmail.com',
+  recipientEmail = 'david@3e8robotics.com',
   locationName = 'Local Toronto 3D print'
 }: OrderFormProps = {}) {
   const [file, setFile] = useState<File | null>(null);
