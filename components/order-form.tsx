@@ -348,9 +348,14 @@ export function OrderForm({
             <h2 className="text-3xl font-bold tracking-tight mb-3 text-balance">
               Order received
             </h2>
-            <p className="text-muted-foreground leading-relaxed">
+            <p className="text-muted-foreground leading-relaxed mb-4">
               {"We'll review your file and send you a approved quote and payment link via email."}
             </p>
+            {recipientEmail === 'david@3e8robotics.com' && (
+              <p className="text-sm text-muted-foreground mb-6">
+                Call <a href="tel:6475465373" className="text-primary hover:underline font-medium">647-546-5373</a> if you want an instant response
+              </p>
+            )}
             <Button
               className="mt-8 bg-primary text-primary-foreground hover:bg-primary/90"
               onClick={() => {

@@ -12,9 +12,24 @@ const _spaceMono = Space_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'FORGED — 3D Print Service',
+  title: '3D Print Service — Toronto & San Francisco',
   description:
-    'Professional FDM printing on the Ender 5 Max. Upload your STL, pick your options, and we handle the rest.',
+    'Professional 3D printing service. Upload your STL, OBJ, or 3MF file, pick your options, and get an instant quote. Available in Toronto and San Francisco.',
+  keywords: ['3D printing', '3D print service', 'Toronto', 'San Francisco', 'STL', 'OBJ', '3MF', 'FDM printing'],
+  authors: [{ name: '3E8 Robotics' }],
+  openGraph: {
+    title: '3D Print Service — Toronto & San Francisco',
+    description: 'Professional 3D printing service. Upload your model and get an instant quote.',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary',
+    title: '3D Print Service — Toronto & San Francisco',
+    description: 'Professional 3D printing service. Upload your model and get an instant quote.',
+  },
+  icons: {
+    icon: '/icon.svg',
+  },
 }
 
 export const viewport: Viewport = {
