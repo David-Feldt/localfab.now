@@ -157,15 +157,18 @@ export async function POST(request: NextRequest) {
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
     
     if (!RESEND_API_KEY) {
-      console.error('RESEND_API_KEY is not set');
+      console.error('RESEND_API_KEY is not set in environment variables');
       return NextResponse.json(
-        { error: 'Email service not configured' },
+        { error: 'Email service not configured. RESEND_API_KEY is missing.' },
         { status: 500 }
       );
     }
-
+    
     // Get recipient email from form data, default to david@3e8robotics.com
     const recipientEmail = (formData.get('recipientEmail') as string) || 'david@3e8robotics.com';
+
+    console.log('Sending email to:', recipientEmail);
+    console.log('API key present:', RESEND_API_KEY ? 'Yes' : 'No');
 
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -179,19 +182,31 @@ export async function POST(request: NextRequest) {
         reply_to: orderData.email, // Reply to customer's email
         subject: `Print Request - $${orderData.totalPrice} CAD`,
         html: emailHtml,
-        attachments: modelFile ? [{
-          filename: orderData.fileName,
-          content: fileBase64,
-          type: fileMimeType,
-        }] : undefined,
+        ...(modelFile && fileBase64 ? {
+          attachments: [{
+            filename: orderData.fileName,
+            content: fileBase64,
+          }]
+        } : {}),
       }),
     });
 
     if (!emailResponse.ok) {
-      const errorData = await emailResponse.text();
-      console.error('Resend API error:', errorData);
+      let errorData;
+      try {
+        errorData = await emailResponse.json();
+      } catch {
+        errorData = await emailResponse.text();
+      }
+      console.error('Resend API error:', JSON.stringify(errorData, null, 2));
+      console.error('Response status:', emailResponse.status);
+      console.error('Response headers:', Object.fromEntries(emailResponse.headers.entries()));
       return NextResponse.json(
-        { error: 'Failed to send email' },
+        { 
+          error: 'Failed to send email', 
+          details: typeof errorData === 'string' ? errorData : JSON.stringify(errorData),
+          status: emailResponse.status
+        },
         { status: 500 }
       );
     }
@@ -205,8 +220,9 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('Error sending order email:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', details: errorMessage },
       { status: 500 }
     );
   }

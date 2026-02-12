@@ -325,7 +325,9 @@ export function OrderForm({
       });
 
       if (!response.ok) {
-        throw new Error('Failed to send order');
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('API error response:', errorData);
+        throw new Error(errorData.error || 'Failed to send order');
       }
 
       setSubmitted(true);
