@@ -177,9 +177,9 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: '3D Print Service <onboarding@resend.dev>', // Update this to your verified domain in Resend
+        from: '3D Print Service <orders@localfab.now>',
         to: [recipientEmail], // Use recipient email from form
-        reply_to: orderData.email, // Reply to customer's email
+        ...(orderData.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orderData.email) ? { reply_to: orderData.email } : {}),
         subject: `Print Request - $${orderData.totalPrice} CAD`,
         html: emailHtml,
         ...(modelFile && fileBase64 ? {
